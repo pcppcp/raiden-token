@@ -2,6 +2,10 @@ import time
 import numpy
 import click
 import random
+import datetime
+
+import logging
+log = logging.getLogger(__name__)
 
 
 def generate(kwargs):
@@ -30,20 +34,24 @@ def generate(kwargs):
                                 (x * sigma * numpy.sqrt(2 * numpy.pi)))
 
     bids = []
-    token_buys = []
     funding_target = []
-    tokens_left = total_supply
     sigma = kwargs['sigma']
     mu = kwargs['mu']
+    bids_sum = 0
+    auctioned = 0.5
     for current_price in price_graph:
+        current_target = current_price * total_supply * auctioned
+        log.info("%s price=%.3e sum=%.3e target=%.3e" % (
+            datetime.timedelta(seconds=timestamped[price_graph.index(current_price)] - time_now),
+            current_price, bids_sum, current_target))
         bid = max_bid * pdf(price_graph.index(current_price) / len(price_graph) * 2.5 + 0.01,
                             sigma, mu) * random.random()
-        tokens_left -= bid / current_price
+        bids_sum += bid
         bids.append(bid)
-        funding_target.append((tokens_left) * current_price)
-        token_buys.append(bid / current_price)
-        if total_supply < 0:
+        funding_target.append(current_target)
+        if bids_sum >= current_target:
             break
+    log.info("bids sum=%.3e, current target=%.3e" % (bids_sum, current_target))
 
     ar, ar_bins = numpy.histogram(timestamped[:len(bids)],
                                   bins=bins,
@@ -53,14 +61,11 @@ def generate(kwargs):
 
     target_ar = numpy.interp(numpy.arange(0, len(funding_target), len(funding_target) / bins),
                              numpy.arange(0, len(funding_target)), funding_target)
-    token_buys_ar = numpy.interp(numpy.arange(0, len(token_buys), len(token_buys) / bins),
-                                 numpy.arange(0, len(token_buys)), token_buys)
     return {
         'timestamped_bins': [int(x) for x in ar_bins[:-1].tolist()],
         'bin_sum': [int(x) for x in ar.tolist()],
         'bin_cumulative_sum': [int(x) for x in numpy.cumsum(ar).tolist()],
         'funding_target': target_ar.tolist(),
-        'token_buys': token_buys_ar.tolist(),
         'price': price_ar.tolist()
     }
 
@@ -84,32 +89,26 @@ def plot(data):
     plt.figure(1)
 
     # plotting price graph
-    plt.subplot(511)
+    plt.subplot(411)
     plt.ylabel('price')
     remove_xticks()
     dates = [dt.datetime.fromtimestamp(ts) for ts in data['timestamped_bins']]
     plt.plot(dates, data['price'], 'r')
 
     # plotting  sum
-    plt.subplot(512)
+    plt.subplot(412)
     remove_xticks()
     plt.ylabel('bids')
     plt.bar(dates, data['bin_sum'], 0.1)
 
-    # plotting cumulative sum
-    plt.subplot(513)
-    remove_xticks()
-    plt.ylabel('token buys')
-    plt.bar(dates, data['token_buys'], 0.1)
-
     # plotting funding target
-    plt.subplot(514)
+    plt.subplot(413)
     remove_xticks()
     plt.ylabel('target [Eth]')
     plt.plot(dates, data['funding_target'], 'r')
 
     # plotting cumulative sum
-    plt.subplot(515)
+    plt.subplot(414)
     adjust_xaxis()
     plt.ylabel('bids total')
     plt.plot(dates, data['bin_cumulative_sum'], 'r')
@@ -131,7 +130,7 @@ def plot(data):
 )
 @click.option(
     '--total-supply',
-    default=10000,
+    default=100e6,
     type=int,
     help='total token supply (tokens)'
 )
@@ -143,13 +142,13 @@ def plot(data):
 )
 @click.option(
     '--duration',
-    default=14 * 24 * 60 * 60,
+    default=10 * 24 * 60 * 60,
     type=int,
     help='duration of the auction (seconds)'
 )
 @click.option(
     '--price-start',
-    default=2e18,
+    default=2 * 10**18,
     type=int,
     help='price start (wei)'
 )
@@ -190,6 +189,8 @@ def plot(data):
     help='print result as a JSON to stdout'
 )
 def main(**kwargs):
+    if kwargs['json']:
+        log.setLevel(level=logging.FATAL)
     data = generate(kwargs)
     if kwargs['plot']:
         plot(data)
@@ -199,4 +200,5 @@ def main(**kwargs):
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.DEBUG)
     main()
